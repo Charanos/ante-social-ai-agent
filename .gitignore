@@ -1,0 +1,16 @@
+# ─── Runtime ────────────────────
+node_modules/
+dist/
+logs/
+*.log
+
+# ─── Env ────────────────────────
+.env
+.env.local
+
+# ─── TypeScript ─────────────────
+*.tsbuildinfo
+
+# ─── OS ─────────────────────────
+.DS_Store
+Thumbs.db

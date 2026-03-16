@@ -1,0 +1,36 @@
+{
+  "name": "ante-social-ai-agent",
+  "version": "1.0.0",
+  "description": "AI-powered market automation agent for Ante Social — creates and resolves Kenyan prediction markets",
+  "main": "dist/src/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/main.js",
+    "dev": "ts-node -r tsconfig-paths/register src/main.ts",
+    "dev:watch": "ts-node-dev --respawn --transpile-only src/main.ts",
+    "test": "jest",
+    "test:integration": "jest --testPathPattern=integration",
+    "seed:jwt": "ts-node -r tsconfig-paths/register scripts/get-jwt.ts",
+    "lint": "eslint src/**/*.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios": "^1.7.0",
+    "axios-retry": "^4.0.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.0",
+    "feedparser-promised": "^2.0.1",
+    "node-cron": "^3.0.3",
+    "redis": "^4.6.0",
+    "winston": "^3.13.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.5.0"
+  }
+}
