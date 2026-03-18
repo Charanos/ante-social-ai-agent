@@ -7,11 +7,13 @@ import cron from 'node-cron';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { DiscoveryOrchestrator } from '../orchestrator/discovery.orchestrator';
+import { DailyReportService } from '../services/daily-report.service';
 
 export class AgentScheduler {
   private jobs: cron.ScheduledTask[] = [];
   private isDiscoveryRunning = false;
   private isResolutionRunning = false;
+  private readonly dailyReport = new DailyReportService();
 
   constructor(private readonly orchestrator: DiscoveryOrchestrator) {}
 
@@ -26,6 +28,10 @@ export class AgentScheduler {
     const discoveryJob = cron.schedule(
       config.discoveryCron,
       async () => {
+        if (!config.discoveryEnabled) {
+          logger.info('Discovery disabled — skipping run');
+          return;
+        }
         if (this.isDiscoveryRunning) {
           logger.warn('Discovery is still running from previous cycle — skipping');
           return;
@@ -44,6 +50,10 @@ export class AgentScheduler {
     const resolutionJob = cron.schedule(
       config.resolutionCron,
       async () => {
+        if (!config.resolutionEnabled) {
+          logger.info('Resolution disabled — skipping run');
+          return;
+        }
         if (this.isResolutionRunning) {
           logger.warn('Resolution is still running from previous cycle — skipping');
           return;
@@ -68,12 +78,23 @@ export class AgentScheduler {
       { timezone: 'Africa/Nairobi' },
     );
 
-    this.jobs = [discoveryJob, resolutionJob, jwtRefreshJob];
+    // ─── Daily Metrics Report ────────────────────────────────────────────────
+    const dailyReportJob = cron.schedule(
+      '55 23 * * *',  // 23:55 EAT
+      async () => {
+        logger.info('Generating daily AI agent report...');
+        await this.dailyReport.generateDailyReport();
+      },
+      { timezone: 'Africa/Nairobi' },
+    );
 
-    logger.info('✅ Scheduler started — 3 jobs active', {
+    this.jobs = [discoveryJob, resolutionJob, jwtRefreshJob, dailyReportJob];
+
+    logger.info('✅ Scheduler started — 4 jobs active', {
       discovery: config.discoveryCron,
       resolution: config.resolutionCron,
       jwtRefresh: 'every 23h',
+      dailyReport: '23:55 EAT',
     });
   }
 

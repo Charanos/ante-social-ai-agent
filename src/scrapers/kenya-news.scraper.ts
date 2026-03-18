@@ -1,14 +1,19 @@
-/**
- * News Scraper — fetches events from Kenyan RSS feeds and news sites.
+﻿/**
+ * News Scraper â€” fetches events from Kenyan RSS feeds and news sites.
  * Returns structured ScrapedEvent objects for the market creator agent.
  */
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-// @ts-ignore — feedparser-promised has no types
+// @ts-ignore â€” feedparser-promised has no types
 import feedparser from 'feedparser-promised';
 import { logger } from '../utils/logger';
 import type { ScrapedEvent } from '../types';
+import { detectCategory, isLikelyMarketable, isUsableHeadline, normalizeHeadline } from './utils';
+import { fetchOfficialKenyaEvents } from './official-sources.scraper';
+import { fetchTwitterApifyEvents } from './twitter-apify.scraper';
+import { fetchRedditEvents } from './reddit.scraper';
+import { fetchFacebookEvents } from './facebook.scraper';
 
 interface RSSItem {
   title: string;
@@ -20,51 +25,145 @@ interface RSSItem {
   [key: string]: unknown;
 }
 
-// ─── RSS Feed Sources ────────────────────────────────────────────────────────
+// â”€â”€â”€ RSS Feed Sources â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-const RSS_SOURCES: Array<{ name: string; url: string; category: string }> = [
-  { name: 'Daily Nation', url: 'https://nation.africa/service/rss/kenya', category: 'General' },
-  { name: 'Business Daily', url: 'https://www.businessdailyafrica.com/service/rss/722556/634/q8y7m5/index.xml', category: 'Finance' },
-  { name: 'The Star Kenya', url: 'https://www.the-star.co.ke/rss', category: 'General' },
-  { name: 'Capital News', url: 'https://www.capitalfm.co.ke/news/feed/', category: 'General' },
-  { name: 'Standard Media', url: 'https://www.standardmedia.co.ke/rss/kenya.php', category: 'General' },
+const RSS_SOURCES: Array<{ name: string; url: string; category: string; homepage?: string }> = [
+  {
+    name: 'Daily Nation',
+    url: 'https://nation.africa/kenya/rss.xml',
+    homepage: 'https://nation.africa/kenya',
+    category: 'General',
+  },
+  {
+    name: 'Business Daily',
+    url: 'https://www.businessdailyafrica.com',
+    homepage: 'https://www.businessdailyafrica.com',
+    category: 'Finance',
+  },
+  {
+    name: 'The Star Kenya',
+    url: 'https://www.the-star.co.ke',
+    homepage: 'https://www.the-star.co.ke',
+    category: 'General',
+  },
+  {
+    name: 'Capital News',
+    url: 'https://www.capitalfm.co.ke/news/feed/',
+    homepage: 'https://www.capitalfm.co.ke/news',
+    category: 'General',
+  },
+  {
+    name: 'Standard Media',
+    url: 'https://www.standardmedia.co.ke/rss/kenya.php',
+    homepage: 'https://www.standardmedia.co.ke',
+    category: 'General',
+  },
 ];
 
-// ─── Keyword-based category detection ───────────────────────────────────────
+const WEB_SOURCES: Array<{ name: string; url: string; category: string }> = [
+  { name: 'Citizen Digital', url: 'https://www.citizen.digital', category: 'General' },
+  { name: 'Tuko News', url: 'https://tuko.co.ke', category: 'General' },
+  { name: 'Standard Media', url: 'https://www.standardmedia.co.ke/politics', category: 'Politics' },
+  { name: 'Standard Media Sports', url: 'https://www.standardmedia.co.ke/sports', category: 'Sports' },
+  { name: 'Business Daily', url: 'https://www.businessdailyafrica.com/bd/markets', category: 'Finance' },
+];
 
-const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  Football: ['fkf', 'gor mahia', 'afc leopards', 'harambee stars', 'premier league kenya', 'mechi', 'fkf cup'],
-  Sports: ['match', 'tournament', 'championship', 'final', 'qualifier', 'kenya sevens', 'safari rally', 'marathon', 'rugby', 'boxing'],
-  Politics: ['election', 'parliament', 'senate', 'cabinet', 'uchaguzi', 'bunge', 'referendum', 'ruto', 'raila', 'iebc', 'governor', 'vote'],
-  Finance: ['ksh', 'kes', 'shilling', 'exchange rate', 'cbk', 'interest rate', 'forex', 'nse', 'stocks'],
-  Economics: ['inflation', 'gdp', 'unemployment', 'fuel prices', 'food prices', 'electricity tariff', 'budget', 'revenue', 'knbs'],
-  Crypto: ['bitcoin', 'ethereum', 'crypto', 'btc', 'eth', 'blockchain', 'usdt', 'binance'],
-  Business: ['earnings', 'dividend', 'ipo', 'safaricom', 'equity bank', 'kcb', 'merger', 'acquisition'],
-  Entertainment: ['award', 'music', 'grammy', 'skiza', 'afrimma', 'nje ya pombe'],
-};
+async function discoverRssUrls(homepage?: string): Promise<string[]> {
+  if (!homepage) return [];
+  try {
+    const response = await axios.get(homepage, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AnteSocialBot/1.0)' },
+      timeout: 8000,
+    });
+    const $ = cheerio.load(response.data as string);
+    const candidates = new Set<string>();
 
-function detectCategory(text: string): string {
-  const lower = text.toLowerCase();
-  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-    if (keywords.some((kw) => lower.includes(kw))) return category;
+    $('link[rel="alternate"][type="application/rss+xml"], link[rel="alternate"][type="application/atom+xml"]').each(
+      (_, el) => {
+        const href = $(el).attr('href');
+        if (href) candidates.add(new URL(href, homepage).toString());
+      },
+    );
+
+    $('a[href]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (!href) return;
+      const normalized = href.toLowerCase();
+      if (normalized.includes('rss') || normalized.includes('feed') || normalized.includes('atom')) {
+        candidates.add(new URL(href, homepage).toString());
+      }
+    });
+
+    const fallbackPaths = ['/rss', '/rss.xml', '/feed', '/feed.xml', '/feeds', '/feeds/rss'];
+    fallbackPaths.forEach((path) => {
+      try {
+        candidates.add(new URL(path, homepage).toString());
+      } catch {
+        // ignore invalid URL
+      }
+    });
+
+    return Array.from(candidates);
+  } catch {
+    return [];
   }
-  return 'General';
 }
 
-// ─── Marketability filter keywords ──────────────────────────────────────────
-
-const MARKETABLE_KEYWORDS = [
-  'will', 'who will', 'who wins', 'who won', 'final', 'vs', 'versus', 'against',
-  'election', 'vote', 'match', 'announce', 'rate', 'result', 'qualify',
-  'championship', 'playoff', 'debate', 'decision', 'budget',
-];
-
-function isLikelyMarketable(title: string): boolean {
-  const lower = title.toLowerCase();
-  return MARKETABLE_KEYWORDS.some((kw) => lower.includes(kw));
+async function tryParseFeed(url: string): Promise<RSSItem[] | null> {
+  try {
+    return await feedparser.parse(url);
+  } catch {
+    return null;
+  }
 }
 
-// ─── NewsAPI integration ─────────────────────────────────────────────────────
+async function scrapeWebSource(source: { name: string; url: string; category: string }): Promise<ScrapedEvent[]> {
+  const events: ScrapedEvent[] = [];
+  try {
+    const response = await axios.get(source.url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AnteSocialBot/1.0)' },
+      timeout: 8000,
+    });
+    const $ = cheerio.load(response.data as string);
+
+    const seen = new Set<string>();
+    $('h1, h2, h3, h4, a, article').each((_, el) => {
+      const text = normalizeHeadline($(el).text());
+      if (!isUsableHeadline(text)) return;
+      if (!isLikelyMarketable(text)) return;
+
+      const key = text.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      events.push({
+        title: text,
+        description: text,
+        category: detectCategory(text) || source.category,
+        source: source.name,
+        sourceUrl: source.url,
+        detectedAt: new Date().toISOString(),
+      });
+    });
+  } catch {
+    return [];
+  }
+
+  return events.slice(0, 12);
+}
+
+export async function fetchWebNewsEvents(): Promise<ScrapedEvent[]> {
+  const results = await Promise.allSettled(WEB_SOURCES.map((source) => scrapeWebSource(source)));
+  const all: ScrapedEvent[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') all.push(...result.value);
+  }
+  return all;
+}
+
+// Category + marketability helpers live in ./utils
+
+// â”€â”€â”€ NewsAPI integration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function fetchNewsApiEvents(apiKey: string): Promise<ScrapedEvent[]> {
   if (!apiKey) return [];
@@ -109,49 +208,65 @@ export async function fetchNewsApiEvents(apiKey: string): Promise<ScrapedEvent[]
   return events;
 }
 
-// ─── RSS Feed scraper ────────────────────────────────────────────────────────
+// â”€â”€â”€ RSS Feed scraper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function fetchRssEvents(): Promise<ScrapedEvent[]> {
   const events: ScrapedEvent[] = [];
   const cutoff = Date.now() - 24 * 60 * 60 * 1000; // Last 24 hours
 
   for (const source of RSS_SOURCES) {
-    try {
-      const items: RSSItem[] = await feedparser.parse(source.url);
-      for (const item of items.slice(0, 15)) {
-        const pubDate = item.pubDate || item.date;
-        if (pubDate && new Date(pubDate).getTime() < cutoff) continue;
+    const items = await tryParseFeed(source.url);
+    let resolvedItems = items;
 
-        const title = item.title?.trim() || '';
-        const description = (item.description || item.summary || '').replace(/<[^>]+>/g, '').trim();
-
-        if (!title || title.length < 10) continue;
-        if (!isLikelyMarketable(title + ' ' + description)) continue;
-
-        events.push({
-          title,
-          description: description || title,
-          category: detectCategory(title + ' ' + description),
-          source: source.name,
-          detectedAt: new Date().toISOString(),
-          eventDate: pubDate ? new Date(pubDate).toISOString() : undefined,
-        });
+    if (!resolvedItems && source.homepage) {
+      const discovered = await discoverRssUrls(source.homepage);
+      for (const candidate of discovered) {
+        resolvedItems = await tryParseFeed(candidate);
+        if (resolvedItems) {
+          logger.info(`Discovered RSS feed for ${source.name}`, { url: candidate });
+          break;
+        }
       }
-    } catch (error) {
-      logger.warn(`RSS fetch failed for ${source.name}`, { error: (error as Error).message });
+    }
+
+    if (!resolvedItems) {
+      logger.warn(`RSS fetch failed for ${source.name}`, {
+        error: 'RSS feed unavailable or not discoverable',
+      });
+      continue;
+    }
+
+    for (const item of resolvedItems.slice(0, 15)) {
+      const pubDate = item.pubDate || item.date;
+      if (pubDate && new Date(pubDate).getTime() < cutoff) continue;
+
+      const title = item.title?.trim() || '';
+      const description = (item.description || item.summary || '').replace(/<[^>]+>/g, '').trim();
+
+      if (!title || title.length < 10) continue;
+      if (!isLikelyMarketable(title + ' ' + description)) continue;
+
+      events.push({
+        title,
+        description: description || title,
+        category: detectCategory(title + ' ' + description),
+        source: source.name,
+        detectedAt: new Date().toISOString(),
+        eventDate: pubDate ? new Date(pubDate).toISOString() : undefined,
+      });
     }
   }
 
   return events;
 }
 
-// ─── SportRadar Kenya Football ───────────────────────────────────────────────
+// â”€â”€â”€ SportRadar Kenya Football â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function fetchSportRadarEvents(apiKey: string): Promise<ScrapedEvent[]> {
   if (!apiKey) return [];
 
   try {
-    // SportRadar Soccer API — Kenya Premier League
+    // SportRadar Soccer API â€” Kenya Premier League
     const response = await axios.get(
       'https://api.sportradar.com/soccer/t2/en/schedules/live/results.json',
       {
@@ -169,7 +284,7 @@ export async function fetchSportRadarEvents(apiKey: string): Promise<ScrapedEven
       const startTime = game.sport_event?.start_time;
 
       events.push({
-        title: `${homeTeam} vs ${awayTeam} — Match Result`,
+        title: `${homeTeam} vs ${awayTeam} â€” Match Result`,
         description: `FKF/Africa football match between ${homeTeam} and ${awayTeam}. Market resolves on the official full-time score.`,
         category: 'Football',
         source: 'SportRadar',
@@ -183,7 +298,7 @@ export async function fetchSportRadarEvents(apiKey: string): Promise<ScrapedEven
   } catch (error) {
     const msg = (error as Error).message;
     if (msg.includes('403')) {
-      logger.warn('SportRadar fetch 403 Forbidden — API key may lack access to the soccer/t2 endpoint.');
+      logger.warn('SportRadar fetch 403 Forbidden â€” API key may lack access to the soccer/t2 endpoint.');
     } else {
       logger.warn('SportRadar fetch failed', { error: msg });
     }
@@ -191,7 +306,7 @@ export async function fetchSportRadarEvents(apiKey: string): Promise<ScrapedEven
   }
 }
 
-// ─── FKF Fixture Scraper ─────────────────────────────────────────────────────
+// â”€â”€â”€ FKF Fixture Scraper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function fetchFkfFixtures(): Promise<ScrapedEvent[]> {
   try {
@@ -202,7 +317,7 @@ export async function fetchFkfFixtures(): Promise<ScrapedEvent[]> {
     const $ = cheerio.load(response.data as string);
     const events: ScrapedEvent[] = [];
 
-    // Generic fixture extraction — adjust selectors if FKF site changes
+    // Generic fixture extraction â€” adjust selectors if FKF site changes
     $('article, .fixture, .match, .game').each((_, el) => {
       const text = $(el).text().trim();
       if (text.includes(' vs ') || text.includes(' v ')) {
@@ -227,26 +342,45 @@ export async function fetchFkfFixtures(): Promise<ScrapedEvent[]> {
   }
 }
 
-// ─── Main export ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Main export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function fetchAllKenyaEvents(keys: {
   newsApiKey: string;
   sportRadarApiKey: string;
+  apifyToken: string;
+  enableRss?: boolean;
+  enableNewsApi?: boolean;
+  enableSportRadar?: boolean;
+  enableApify?: boolean;
+  enableOfficialSources?: boolean;
+  enableReddit?: boolean;
+  enableFacebook?: boolean;
+  facebookToken?: string;
 }): Promise<ScrapedEvent[]> {
   logger.info('Fetching events from all Kenya sources...');
 
-  const [rss, newsApi, sportRadar, fkf] = await Promise.allSettled([
-    fetchRssEvents(),
-    fetchNewsApiEvents(keys.newsApiKey),
-    fetchSportRadarEvents(keys.sportRadarApiKey),
+  const [rss, web, newsApi, sportRadar, fkf, official, twitter, reddit, facebook] = await Promise.allSettled([
+    keys.enableRss === false ? Promise.resolve([]) : fetchRssEvents(),
+    keys.enableRss === false ? Promise.resolve([]) : fetchWebNewsEvents(),
+    keys.enableNewsApi === false ? Promise.resolve([]) : fetchNewsApiEvents(keys.newsApiKey),
+    keys.enableSportRadar === false ? Promise.resolve([]) : fetchSportRadarEvents(keys.sportRadarApiKey),
     fetchFkfFixtures(),
+    keys.enableOfficialSources === false ? Promise.resolve([]) : fetchOfficialKenyaEvents(),
+    keys.enableApify === false ? Promise.resolve([]) : fetchTwitterApifyEvents(keys.apifyToken),
+    keys.enableReddit === false ? Promise.resolve([]) : fetchRedditEvents(),
+    keys.enableFacebook === false ? Promise.resolve([]) : fetchFacebookEvents(keys.facebookToken || ''),
   ]);
 
   const all: ScrapedEvent[] = [
     ...(rss.status === 'fulfilled' ? rss.value : []),
+    ...(web.status === 'fulfilled' ? web.value : []),
     ...(newsApi.status === 'fulfilled' ? newsApi.value : []),
     ...(sportRadar.status === 'fulfilled' ? sportRadar.value : []),
     ...(fkf.status === 'fulfilled' ? fkf.value : []),
+    ...(official.status === 'fulfilled' ? official.value : []),
+    ...(twitter.status === 'fulfilled' ? twitter.value : []),
+    ...(reddit.status === 'fulfilled' ? reddit.value : []),
+    ...(facebook.status === 'fulfilled' ? facebook.value : []),
   ];
 
   // Deduplicate by similar title
@@ -261,3 +395,4 @@ export async function fetchAllKenyaEvents(keys: {
   logger.info(`Fetched ${deduped.length} unique events (${all.length} raw)`);
   return deduped;
 }
+

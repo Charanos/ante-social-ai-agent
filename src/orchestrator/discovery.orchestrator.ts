@@ -9,9 +9,12 @@
 
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { metrics } from '../utils/metrics';
+import { sendAlert } from '../utils/alerts';
 import { MarketCreatorAgent } from '../agents/market-creator.agent';
 import { ResolutionVerifierAgent } from '../agents/resolution-verifier.agent';
 import { MarketApiService } from '../services/market-api.service';
+import { PolymarketResolverService } from '../services/polymarket-resolver.service';
 import { DeduplicationService } from '../services/deduplication.service';
 import { fetchAllKenyaEvents } from '../scrapers/kenya-news.scraper';
 import type { AIGeneratedMarket, MarketResponse } from '../types';
@@ -19,6 +22,7 @@ import type { AIGeneratedMarket, MarketResponse } from '../types';
 export class DiscoveryOrchestrator {
   private readonly creator: MarketCreatorAgent;
   private readonly resolver: ResolutionVerifierAgent;
+  private readonly polymarketResolver: PolymarketResolverService;
 
   constructor(
     private readonly marketApi: MarketApiService,
@@ -26,6 +30,7 @@ export class DiscoveryOrchestrator {
   ) {
     this.creator = new MarketCreatorAgent();
     this.resolver = new ResolutionVerifierAgent(marketApi);
+    this.polymarketResolver = new PolymarketResolverService(marketApi);
   }
 
   // ─── Market Discovery & Creation ────────────────────────────────────────────
@@ -41,17 +46,28 @@ export class DiscoveryOrchestrator {
       const events = await fetchAllKenyaEvents({
         newsApiKey: config.newsApiKey,
         sportRadarApiKey: config.sportRadarApiKey,
+        apifyToken: config.apifyToken,
+        facebookToken: config.facebookToken,
+        enableRss: config.enableRss,
+        enableNewsApi: config.enableNewsApi,
+        enableSportRadar: config.enableSportRadar,
+        enableApify: config.enableApify,
+        enableOfficialSources: config.enableOfficialSources,
+        enableReddit: config.enableReddit,
+        enableFacebook: config.enableFacebook,
       });
 
       if (!events.length) {
         logger.info('No events fetched — ending discovery run');
         return;
       }
+      metrics.eventsFetched += events.length;
 
       // 3. Pre-filter for marketability (one batch Claude call)
       const marketableFlags = await this.creator.filterMarketableEvents(events);
       const marketableEvents = events.filter((_, i) => marketableFlags[i]);
       logger.info(`${marketableEvents.length}/${events.length} events are marketable`);
+      metrics.eventsMarketable += marketableEvents.length;
 
       // 4. Deduplicate against already-processed events
       const newEvents = [];
@@ -64,6 +80,7 @@ export class DiscoveryOrchestrator {
         newEvents.push(event);
       }
       logger.info(`${newEvents.length} new (non-duplicate) events to process`);
+      metrics.eventsDeduped += newEvents.length;
 
       // 5. Process each new event (up to maxMarketsPerRun)
       let created = 0;
@@ -87,16 +104,19 @@ export class DiscoveryOrchestrator {
           if (market.confidence >= config.minConfidenceToPost) {
             await this.postMarket(market, key);
             created++;
+            metrics.marketsCreated += 1;
           } else if (market.confidence >= 60) {
             logger.info(
               `Low confidence (${market.confidence}) — queuing for admin review: ${market.title}`,
             );
             await this.postMarketAsDraft(market, key);
             created++;
+            metrics.marketsDrafted += 1;
           } else {
             logger.info(`Very low confidence (${market.confidence}) — skipping: ${market.title}`);
             await this.dedup.markProcessed(key);
             skipped++;
+            metrics.marketsSkipped += 1;
           }
 
           // Rate limit — small delay between Claude calls
@@ -109,6 +129,10 @@ export class DiscoveryOrchestrator {
       }
 
       logger.info(`═══ Discovery Complete — Created: ${created}, Skipped: ${skipped} ═══`);
+      metrics.logSummary('discovery');
+      if (metrics.apiErrors >= 3) {
+        await sendAlert('market-api', 'CRITICAL: Market API errors are spiking (>=3).');
+      }
     } catch (error) {
       logger.error('Discovery run failed', { error: (error as Error).message });
     }
@@ -141,10 +165,9 @@ export class DiscoveryOrchestrator {
     try {
       await this.marketApi.ensureValidJwt();
 
-      // Find all closed AI-created markets
+      // Find all closed markets for resolution (AI, Native, etc.)
       const result = await this.marketApi.getMarkets({
         status: 'closed',
-        externalSource: 'ai-agent',
         limit: 50,
       });
 
@@ -158,12 +181,19 @@ export class DiscoveryOrchestrator {
         const wasSettled = await this.resolver.verifyAndSettle(market);
         if (wasSettled) settled++;
         else flagged++;
+        metrics.resolutionSettled += wasSettled ? 1 : 0;
+        metrics.resolutionFlagged += wasSettled ? 0 : 1;
 
         // Small delay between resolution checks
         await this.sleep(2000);
       }
 
       logger.info(`═══ Resolution Complete — Settled: ${settled}, Flagged: ${flagged} ═══`);
+      metrics.logSummary('resolution');
+
+      if (config.resolvePolymarket) {
+        await this.polymarketResolver.resolveClosedPolymarketMarkets();
+      }
     } catch (error) {
       logger.error('Resolution run failed', { error: (error as Error).message });
     }
@@ -173,3 +203,4 @@ export class DiscoveryOrchestrator {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
+

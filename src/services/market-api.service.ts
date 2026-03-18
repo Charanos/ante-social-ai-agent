@@ -7,6 +7,8 @@ import axios, { AxiosInstance } from 'axios';
 import axiosRetry from 'axios-retry';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { metrics } from '../utils/metrics';
+import { sendAlert } from '../utils/alerts';
 import type {
   AIGeneratedMarket,
   CreateMarketPayload,
@@ -17,6 +19,7 @@ import type {
 export class MarketApiService {
   private readonly http: AxiosInstance;
   private jwtToken: string;
+  private lastJwtCheckAt = 0;
 
   constructor() {
     this.jwtToken = config.aiAgentJwt;
@@ -50,7 +53,13 @@ export class MarketApiService {
       (err) => {
         const status = err.response?.status;
         const data = err.response?.data;
-        logger.error('Market API error', { status, data, url: err.config?.url });
+        const url = err.config?.url || '';
+        if (status === 429 && url.includes('/markets') && url.includes('limit=1')) {
+          logger.warn('Market API rate limited on lightweight probe', { status, url });
+        } else {
+          logger.error('Market API error', { status, data, url });
+          metrics.recordApiError();
+        }
         return Promise.reject(err);
       },
     );
@@ -68,9 +77,11 @@ export class MarketApiService {
         password: config.aiAgentPassword,
       });
       this.jwtToken = response.data.access_token;
+      metrics.recordJwtRefresh();
       logger.info('JWT refreshed successfully');
     } catch (error) {
       logger.error('Failed to refresh JWT', { error: (error as Error).message });
+      await sendAlert('jwt', 'CRITICAL: AI agent JWT refresh failed — check auth-service credentials.');
     }
   }
 
@@ -133,7 +144,20 @@ export class MarketApiService {
 
     // Test the JWT with a lightweight call
     try {
-      await this.http.get('/markets?limit=1');
+      const now = Date.now();
+      if (now - this.lastJwtCheckAt < 10 * 60_000) {
+        return;
+      }
+      this.lastJwtCheckAt = now;
+
+      const response = await this.http.get('/markets?limit=1', {
+        validateStatus: (status) =>
+          Boolean(status) && ((status >= 200 && status < 300) || status === 401 || status === 429),
+      });
+      if (response.status === 401) {
+        logger.warn('JWT expired — refreshing...');
+        await this.refreshJwt();
+      }
     } catch (err: unknown) {
       const error = err as { response?: { status?: number } };
       if (error?.response?.status === 401) {
@@ -143,3 +167,4 @@ export class MarketApiService {
     }
   }
 }
+

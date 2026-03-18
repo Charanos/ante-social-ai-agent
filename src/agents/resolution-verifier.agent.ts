@@ -182,20 +182,21 @@ Return ONLY this JSON:
 }`;
 
     try {
-      const message = await this.anthropic.messages.create({
+      const stream = this.anthropic.messages.stream({
         model: 'claude-3-5-sonnet-20241022',  // Use Sonnet for resolution accuracy
         max_tokens: 512,
         messages: [{ role: 'user', content: prompt }],
       });
 
+      const message = await stream.finalMessage();
       const content = message.content[0];
-      if (content.type !== 'text') throw new Error('Unexpected response type');
+      if (!content || content.type !== 'text') throw new Error('Unexpected response type');
 
-      const jsonText = content.text
-        .replace(/^```(?:json)?\s*/i, '')
-        .replace(/\s*```$/i, '')
-        .trim();
-
+      const text = content.text;
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error(`No JSON block found in response: ${text.substring(0, 100)}...`);
+      
+      const jsonText = jsonMatch[0].trim();
       const parsed = JSON.parse(jsonText) as Omit<ResolutionVerification, 'sources'>;
       return { ...parsed, sources: evidence };
     } catch (error) {

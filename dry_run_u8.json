@@ -1,0 +1,12 @@
+﻿DEBUG: Connected to proxy. Handling SSE stream...
+DEBUG: Message started
+
+DEBUG: Total text length: 1178
+DEBUG: Raw AI Response: ```json
+{
+  "title": "Will Sakaja's 48-hour flood response plan be deemed successful?",
+  "description": "Nairobi Governor Johnson Sakaja has ordered a 48-hour action plan to address flooding in Nairobi. Will this plan be considered a success?",
+  "scenario": "Governor Sakaja has implemented a 48-hour flood response plan for Nairobi. Bet on whether the plan will be deemed successful based on resident feedback, media reports, and government assessment.",
+  "betType": "consensus",
+  "category": "G...
+Generated market: Will Sakaja's 48-hour flood response plan be deemed successful?

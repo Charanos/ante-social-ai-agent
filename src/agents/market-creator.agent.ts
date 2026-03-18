@@ -78,12 +78,13 @@ CURRENT TIME (UTC): ${new Date().toISOString()}
 Return ONLY the JSON object.`;
 
     try {
-      const message = await this.anthropic.messages.create({
+      const stream = await this.anthropic.messages.stream({
         model,
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userPrompt }],
       });
+      const message = await stream.finalMessage();
 
       const content = message.content[0];
       if (content.type !== 'text') {
@@ -142,11 +143,12 @@ ${events.map((e, i) => `${i + 1}. [${e.category}] ${e.title}`).join('\n')}
 Return ONLY a JSON array: [1, 0, 1, ...]`;
 
     try {
-      const message = await this.anthropic.messages.create({
+      const stream = await this.anthropic.messages.stream({
         model: 'claude-3-5-haiku-20241022',
         max_tokens: 256,
         messages: [{ role: 'user', content: prompt }],
       });
+      const message = await stream.finalMessage();
 
       const content = message.content[0];
       if (content.type !== 'text') return events.map(() => true);

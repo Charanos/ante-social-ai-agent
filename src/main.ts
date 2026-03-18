@@ -15,6 +15,7 @@ import { MarketApiService } from './services/market-api.service';
 import { DeduplicationService } from './services/deduplication.service';
 import { DiscoveryOrchestrator } from './orchestrator/discovery.orchestrator';
 import { AgentScheduler } from './scheduler/scheduler';
+import { startAdminServer } from './server';
 
 // Ensure logs directory exists
 const logsDir = path.join(process.cwd(), 'logs');
@@ -55,6 +56,7 @@ async function main() {
 
   const orchestrator = new DiscoveryOrchestrator(marketApi, dedup);
   const scheduler = new AgentScheduler(orchestrator);
+  startAdminServer(orchestrator);
 
   // ─── Start scheduler ──────────────────────────────────────────────────────
   scheduler.start();

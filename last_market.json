@@ -1,0 +1,38 @@
+{
+  "title": "Will Sakaja's 48-Hour Flood Response Plan Be Implemented Successfully?",
+  "description": "Nairobi Governor Johnson Sakaja has directed the preparation of a 48-hour action plan to address flooding. Will the plan be implemented successfully and mitigate the impact of the floods?",
+  "scenario": "Governor Sakaja has ordered a 48-hour flood response plan for Nairobi. Predict the outcome.",
+  "betType": "consensus",
+  "category": "Politics & Current Events",
+  "tags": [
+    "Nairobi",
+    "Flooding",
+    "Sakaja",
+    "Infrastructure",
+    "Governance"
+  ],
+  "buyInAmount": 100,
+  "buyInCurrency": "KES",
+  "closeTime": "2026-03-19T22:00:00Z",
+  "settlementTime": "2026-03-20T10:00:00Z",
+  "isFeatured": true,
+  "isTrending": true,
+  "settlementMethod": "admin_report",
+  "oddsType": "pari_mutuel",
+  "minimumTier": "novice",
+  "outcomes": [
+    {
+      "optionText": "Yes, the plan will be successfully implemented and significantly mitigate flooding."
+    },
+    {
+      "optionText": "Partial success: The plan will be implemented but only have a limited impact on flooding."
+    },
+    {
+      "optionText": "No, the plan will not be implemented effectively or will fail to mitigate flooding."
+    }
+  ],
+  "externalSource": "ai-agent",
+  "externalId": "sakaja-flood-plan-20260317",
+  "confidence": 75,
+  "settlementSource": "Official reports from Nairobi City County Government and relevant news outlets."
+}
