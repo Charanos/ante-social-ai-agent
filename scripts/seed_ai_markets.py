@@ -41,11 +41,12 @@ OUTPUT SCHEMA (exactly — field names are critical):
   "settlementMethod": "admin_report",
   "oddsType": "pari_mutuel",
   "minimumTier": "novice",
-  "outcomes": [{ "optionText": string }],
+  "outcomes": [{ "optionText": string, "mediaUrl": string }],
   "externalSource": "ai-agent",
   "externalId": string,
   "confidence": number,
-  "settlementSource": string
+  "settlementSource": string,
+  "mediaUrl": string
 }
 
 RULES:
@@ -244,6 +245,19 @@ Return ONLY the JSON object."""
             f.write(clean_text)
         
         market = json.loads(clean_text)
+        
+        # Dynamic Features based on confidence
+        conf = market.get("confidence", 50)
+        if conf > 85:
+            market["isFeatured"] = True
+        if conf > 75:
+            market["isTrending"] = True
+            
+        # Image Fallbacks if AI didn't provide good ones
+        if not market.get("mediaUrl"):
+            query = market.get("title", "kenya news").replace(" ", ",")
+            market["mediaUrl"] = f"https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=1200&q=80" # Default news
+            
         return market
     except json.JSONDecodeError as e:
         print(f"ERROR: Failed to parse market JSON: {e}")

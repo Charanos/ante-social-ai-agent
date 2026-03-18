@@ -104,6 +104,11 @@ export class ResolutionVerifierAgent {
     // Always include a general Citizen Digital check
     scrapers.push(() => this.scrapeHeadlines('https://citizen.digital', title, 'Citizen Digital'));
 
+    // Crypto "Up or Down" specialized resolution
+    if (title.includes('up or down') && (title.includes('bitcoin') || title.includes('ethereum') || title.includes('dogecoin') || title.includes('solana'))) {
+      scrapers.push(() => this.getCryptoPriceEvidence(market));
+    }
+
     // Run all scrapers in parallel (with timeout)
     const results = await Promise.allSettled(
       scrapers.map((fn) => Promise.race([fn(), this.timeout<string | null>(8000, null)])),
@@ -146,6 +151,58 @@ export class ResolutionVerifierAgent {
       if (!relevant.length) return null;
 
       return `${sourceName}: ${relevant.slice(0, 3).join(' | ')}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fetch price evidence from CoinGecko for crypto markets */
+  private async getCryptoPriceEvidence(market: MarketResponse): Promise<string | null> {
+    try {
+      const title = market.title.toLowerCase();
+      let coinId = 'bitcoin';
+      if (title.includes('ethereum')) coinId = 'ethereum';
+      if (title.includes('dogecoin')) coinId = 'dogecoin';
+      if (title.includes('solana')) coinId = 'solana';
+
+      const endTime = new Date(market.closeTime).getTime() / 1000;
+      const startTime = endTime - (20 * 60); // Check a 20-min window around closure
+      
+      const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart/range?vs_currency=usd&from=${Math.floor(startTime)}&to=${Math.floor(endTime)}`;
+      
+      const response = await axios.get(url, { timeout: 8000 });
+      const prices: [number, number][] = response.data.prices;
+      
+      if (!prices || prices.length < 2) {
+        // Fallback to legacy history if range fails
+        return this.getLegacyCryptoPrice(market, coinId);
+      }
+
+      const startPrice = prices[0][1];
+      const endPrice = prices[prices.length - 1][1];
+      const change = ((endPrice - startPrice) / startPrice) * 100;
+
+      return `CoinGecko Price Range for ${coinId.toUpperCase()}:
+- Start (approx 15-20 min before close): $${startPrice.toFixed(6)}
+- End (at closure): $${endPrice.toFixed(6)}
+- Price Change: ${change.toFixed(4)}%
+Verification for "Up or Down" should compare end price against start price OR the target price in the description: "${(market as any).description || 'N/A'}"`;
+    } catch (error) {
+      logger.warn('Failed to fetch crypto price evidence', { error: (error as Error).message });
+      return null;
+    }
+  }
+
+  /** Legacy fallback for crypto price resolution */
+  private async getLegacyCryptoPrice(market: MarketResponse, coinId: string): Promise<string | null> {
+    try {
+      const closeDate = new Date(market.closeTime);
+      const dateStr = `${String(closeDate.getUTCDate()).padStart(2, '0')}-${String(closeDate.getUTCMonth() + 1).padStart(2, '0')}-${closeDate.getUTCFullYear()}`;
+      const url = `https://api.coingecko.com/api/v3/coins/${coinId}/history?date=${dateStr}&localization=false`;
+      const response = await axios.get(url, { timeout: 8000 });
+      const price = response.data?.market_data?.current_price?.usd;
+      if (!price) return null;
+      return `CoinGecko Historical Price (${coinId.toUpperCase()}) on ${dateStr}: $${price}`;
     } catch {
       return null;
     }
