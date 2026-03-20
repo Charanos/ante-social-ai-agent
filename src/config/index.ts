@@ -28,8 +28,8 @@ export const config = {
   // AI Agent Identity
   aiAgentUserId: optional('AI_AGENT_USER_ID', ''),
   aiAgentJwt: optional('AI_AGENT_JWT', ''),
-  aiAgentEmail: 'ante-agent@antesocial.co.ke',
-  aiAgentPassword: '4lofrw;AUzBcz.8x',
+  aiAgentEmail: optional('AI_AGENT_EMAIL', 'anti-agent@antesocial.co.ke'),
+  aiAgentPassword: optional('AI_AGENT_PASSWORD', '4lofrw;AUzBcz.8x'),
 
   // AI Model
   anthropicApiKey: required('ANTHROPIC_API_KEY'),

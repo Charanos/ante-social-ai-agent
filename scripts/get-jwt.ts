@@ -8,15 +8,12 @@
  *   npx ts-node scripts/get-jwt.ts
  */
 
-import * as dotenv from 'dotenv';
-import * as path from 'path';
 import axios from 'axios';
+import { config } from '../src/config';
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-
-const AUTH_URL = process.env.AUTH_SERVICE_URL || 'http://127.0.0.1:3002';
-const EMAIL = 'ante-agent@antesocial.co.ke';
-const PASSWORD = '4lofrw;AUzBcz.8x';
+const AUTH_URL = config.authServiceUrl;
+const EMAIL = config.aiAgentEmail;
+const PASSWORD = config.aiAgentPassword;
 
 async function getJwt() {
   console.log(`\n🔑 Getting JWT for: ${EMAIL}`);
